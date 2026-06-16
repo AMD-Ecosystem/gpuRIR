@@ -1,7 +1,7 @@
 //********************************************************//
 // CUDA-to-HIP compatibility shim for gpuRIR              //
 //                                                        //
-// Minimal-footprint port (Strategy A): gpuRIR_cuda.cu     //
+// Minimal-footprint port: gpuRIR_cuda.cu                  //
 // keeps its plain CUDA spelling. On AMD this header pulls  //
 // in the HIP runtime, hipFFT and hipRAND, and #defines     //
 // the CUDA/cuFFT/cuRAND symbols the project uses to their   //

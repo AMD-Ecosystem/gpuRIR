@@ -5,9 +5,9 @@ cmake_minimum_required(VERSION 3.23)
 option(USE_HIP "Build with HIP for AMD GPUs instead of CUDA" OFF)
 
 if(USE_HIP)
-    # Strategy A (colmap model): the existing .cu file is compiled as HIP and
-    # sees the HIP toolchain via a single force-included compat header. Host
-    # C++ (python_bind.cpp, pybind11) is untouched.
+    # The existing .cu file is compiled as HIP and sees the HIP toolchain via a
+    # single force-included compatibility header. Host C++ (python_bind.cpp,
+    # pybind11) is untouched.
     project(gpuRIR LANGUAGES CXX HIP)
     enable_language(HIP)
     if(NOT DEFINED CMAKE_HIP_ARCHITECTURES)
