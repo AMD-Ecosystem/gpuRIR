@@ -8,11 +8,11 @@ if(USE_HIP)
     # The existing .cu file is compiled as HIP and sees the HIP toolchain via a
     # single force-included compatibility header. Host C++ (python_bind.cpp,
     # pybind11) is untouched.
+    # project(... LANGUAGES ... HIP) enables HIP, which honors an explicit
+    # -DCMAKE_HIP_ARCHITECTURES, otherwise auto-detects the host GPU(s), and
+    # errors on a no-GPU build host.
     project(gpuRIR LANGUAGES CXX HIP)
     enable_language(HIP)
-    if(NOT DEFINED CMAKE_HIP_ARCHITECTURES)
-        set(CMAKE_HIP_ARCHITECTURES "gfx90a")
-    endif()
     find_package(hipfft REQUIRED)
     find_package(hiprand REQUIRED)
 else()
