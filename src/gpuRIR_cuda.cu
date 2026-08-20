@@ -2,12 +2,10 @@
 #include <iostream>
 #include <stdio.h>
 
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <curand.h>
-#include <cufft.h>
-#include <cufftXt.h>
-#include <cuda_fp16.h>
+// CUDA headers and their cuFFT/cuRAND swaps are pulled in by this shim.
+// On NVIDIA it includes the original CUDA headers unchanged; on AMD it
+// includes the HIP runtime, hipFFT and hipRAND and aliases the symbols.
+#include "cuda_to_hip.h"
 
 #include <vector>
 #include "gpuRIR_cuda.h"
@@ -235,7 +233,24 @@ __device__ __forceinline__ half2 image_sample_mp(half2 amp, float tau, float t1,
 
 __device__ __forceinline__ float image_sample_lut(float amp, float tau, float t, int Tw_2, cudaTextureObject_t sinc_lut, float lut_center) {
 	float t_tau = t - tau;
-	return (abs(t_tau)<Tw_2)? amp * tex1D<float>(sinc_lut, __fmaf_rz(t_tau,lut_oversamp,lut_center)) : 0.0f;
+	if (abs(t_tau) >= Tw_2) return 0.0f;
+	float coord = __fmaf_rz(t_tau, lut_oversamp, lut_center);
+#if defined(USE_HIP)
+	// AMD hardware does not support linear filtering on element-read float
+	// textures, so the LUT texture is created with point filtering (see
+	// create_sinc_texture_lut). Replicate CUDA's hardware linear filter in
+	// software using the unnormalized -0.5 texel-center convention: a
+	// coordinate c blends texels floor(c-0.5) and floor(c-0.5)+1 with weight
+	// frac(c-0.5). Point-fetch with +0.5 offsets so floor() picks each texel.
+	float c = coord - 0.5f;
+	float i0 = floorf(c);
+	float w = c - i0;
+	float s0 = tex1D<float>(sinc_lut, i0 + 0.5f);
+	float s1 = tex1D<float>(sinc_lut, i0 + 1.5f);
+	return amp * ((1.0f - w) * s0 + w * s1);
+#else
+	return amp * tex1D<float>(sinc_lut, coord);
+#endif
 }
 
 /***********/
@@ -604,7 +619,14 @@ cudaTextureObject_t create_sinc_texture_lut(cudaArray **cuArrayLut, int Tw, int 
     struct cudaTextureDesc texDesc;
     memset(&texDesc, 0, sizeof(texDesc));
     texDesc.addressMode[0]   = cudaAddressModeBorder;
+#if defined(USE_HIP)
+    // AMD rejects cudaFilterModeLinear on element-read float textures at
+    // creation time; point-sample and interpolate in software instead
+    // (see image_sample_lut).
+    texDesc.filterMode       = cudaFilterModePoint;
+#else
     texDesc.filterMode       = cudaFilterModeLinear;
+#endif
     texDesc.readMode         = cudaReadModeElementType;
     texDesc.normalizedCoords = 0;
 	
@@ -1048,6 +1070,13 @@ gpuRIR_cuda::gpuRIR_cuda(bool mPrecision, bool lut) {
 }
 
 bool gpuRIR_cuda::activate_mixed_precision(bool activate) {
+#if defined(USE_HIP)
+	// The half2 mixed-precision kernels are guarded by __CUDA_ARCH__ >= 530
+	// and are not compiled for HIP, so the feature is unavailable on AMD.
+	if (activate) printf("Mixed precision is not supported on the HIP/ROCm build.\n");
+	mixed_precision = false;
+	return mixed_precision;
+#else
 	if (cuda_arch >= 530) {
 		if (activate && lookup_table) {
 			printf("The mixed precision implementation is not compatible with the lookup table.\n");
@@ -1060,6 +1089,7 @@ bool gpuRIR_cuda::activate_mixed_precision(bool activate) {
 		mixed_precision = false;
 	}
 	return mixed_precision;
+#endif
 }
 
 bool gpuRIR_cuda::activate_lut(bool activate) {

@@ -37,6 +37,11 @@ class CMakeBuild(build_ext):
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
                       '-DPYTHON_EXECUTABLE=' + sys.executable]
 
+        # Allow extra cmake args (e.g. -DUSE_HIP=ON for AMD GPUs) via env.
+        extra = os.environ.get('CMAKE_ARGS', '')
+        if extra:
+            cmake_args += extra.split()
+
         cfg = 'Debug' if self.debug else 'Release'
         build_args = ['--config', cfg]
 
