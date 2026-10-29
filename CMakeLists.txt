@@ -17,7 +17,7 @@ if(USE_HIP)
     find_package(hiprand REQUIRED)
 else()
     project(gpuRIR LANGUAGES CXX CUDA)
-    find_package(CUDA)
+    find_package(CUDAToolkit REQUIRED)
 
     # Select several CUDA architectures
     #include(FindCUDA)
@@ -79,10 +79,17 @@ if(NOT USE_HIP)
 endif()
 
 if(USE_HIP)
-    target_link_libraries(gpuRIR_bind PRIVATE hip::hipfft hip::hiprand)
+    target_link_libraries(gpuRIRcu PUBLIC
+        hip::hipfft
+        hip::hiprand
+    )
 else()
-    target_link_libraries(gpuRIR_bind PRIVATE ${CUDA_curand_LIBRARY})
-    target_link_libraries(gpuRIR_bind PRIVATE ${CUDA_CUFFT_LIBRARIES})
+    target_link_libraries(gpuRIRcu PUBLIC
+        CUDA::cufft
+        CUDA::curand
+    )
 endif()
-target_link_libraries(gpuRIR_bind PRIVATE gpuRIRcu)
-target_link_libraries(gpuRIR_bind PRIVATE pybind11::module)
+target_link_libraries(gpuRIR_bind PRIVATE
+    gpuRIRcu
+    pybind11::module
+)
