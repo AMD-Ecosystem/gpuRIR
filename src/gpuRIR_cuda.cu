@@ -231,23 +231,28 @@ __device__ __forceinline__ half2 image_sample_mp(half2 amp, float tau, float t1,
 /* Lookup table auxiliar device functions */
 /******************************************/
 
-__device__ __forceinline__ float image_sample_lut(float amp, float tau, float t, int Tw_2, cudaTextureObject_t sinc_lut, float lut_center) {
+#if defined(USE_HIP)
+// The HIP texture API is unavailable on some AMD GPUs (gfx94x and newer), so
+// the LUT lives in a plain device buffer.
+typedef const float* sinc_lut_t;
+#else
+typedef cudaTextureObject_t sinc_lut_t;
+#endif
+
+__device__ __forceinline__ float image_sample_lut(float amp, float tau, float t, int Tw_2, sinc_lut_t sinc_lut, float lut_center) {
 	float t_tau = t - tau;
 	if (abs(t_tau) >= Tw_2) return 0.0f;
 	float coord = __fmaf_rz(t_tau, lut_oversamp, lut_center);
 #if defined(USE_HIP)
-	// AMD hardware does not support linear filtering on element-read float
-	// textures, so the LUT texture is created with point filtering (see
-	// create_sinc_texture_lut). Replicate CUDA's hardware linear filter in
-	// software using the unnormalized -0.5 texel-center convention: a
-	// coordinate c blends texels floor(c-0.5) and floor(c-0.5)+1 with weight
-	// frac(c-0.5). Point-fetch with +0.5 offsets so floor() picks each texel.
+	// Replicate CUDA's hardware linear filter in software using the
+	// unnormalized -0.5 texel-center convention: a coordinate c blends
+	// texels floor(c-0.5) and floor(c-0.5)+1 with weight frac(c-0.5).
+	// The buffer carries a trailing zero standing in for the border texel.
 	float c = coord - 0.5f;
 	float i0 = floorf(c);
 	float w = c - i0;
-	float s0 = tex1D<float>(sinc_lut, i0 + 0.5f);
-	float s1 = tex1D<float>(sinc_lut, i0 + 1.5f);
-	return amp * ((1.0f - w) * s0 + w * s1);
+	int i = (int)i0;
+	return amp * ((1.0f - w) * sinc_lut[i] + w * sinc_lut[i + 1]);
 #else
 	return amp * tex1D<float>(sinc_lut, coord);
 #endif
@@ -571,7 +576,7 @@ __global__ void h2RIR_to_floatRIR_kernel(half2* h2RIR, float* floatRIR, int M, i
 /* Lookup table KERNELS */
 /************************/
 
-__global__ void generateRIR_kernel_lut(float* initialRIR, float* amp, float* tau, int T, int M, int N, int iniRIR_N, int ini_red, int Tw_2, cudaTextureObject_t sinc_lut, float lut_center) {
+__global__ void generateRIR_kernel_lut(float* initialRIR, float* amp, float* tau, int T, int M, int N, int iniRIR_N, int ini_red, int Tw_2, sinc_lut_t sinc_lut, float lut_center) {
 	int t = blockIdx.x * blockDim.x + threadIdx.x;
 	int m = blockIdx.y * blockDim.y + threadIdx.y;
 	int n_ini = blockIdx.z * ini_red;
@@ -590,7 +595,11 @@ __global__ void generateRIR_kernel_lut(float* initialRIR, float* amp, float* tau
 /* Auxiliar host functions */
 /***************************/
 
+#if defined(USE_HIP)
+float* create_sinc_texture_lut(int Tw, int lut_len) {
+#else
 cudaTextureObject_t create_sinc_texture_lut(cudaArray **cuArrayLut, int Tw, int lut_len) {
+#endif
 	// Create lut in host memory
 	int lut_center = lut_len / 2;
 	float* sinc_lut_host = (float*)malloc(sizeof(float) * lut_len);
@@ -603,6 +612,14 @@ cudaTextureObject_t create_sinc_texture_lut(cudaArray **cuArrayLut, int Tw, int 
 		sinc_lut_host[lut_center-i] = y;
 	}
 	
+#if defined(USE_HIP)
+	float* sinc_lut_dev;
+	gpuErrchk( cudaMalloc(&sinc_lut_dev, sizeof(float)*(lut_len+1)) );
+	gpuErrchk( cudaMemcpy(sinc_lut_dev, sinc_lut_host, sizeof(float)*lut_len, cudaMemcpyHostToDevice) );
+	gpuErrchk( cudaMemset(sinc_lut_dev + lut_len, 0, sizeof(float)) );
+	free(sinc_lut_host);
+	return sinc_lut_dev;
+#else
 	// Copy the lut to a device cudaArray
 	cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
     cudaMallocArray(cuArrayLut, &channelDesc, lut_len);
@@ -619,14 +636,7 @@ cudaTextureObject_t create_sinc_texture_lut(cudaArray **cuArrayLut, int Tw, int 
     struct cudaTextureDesc texDesc;
     memset(&texDesc, 0, sizeof(texDesc));
     texDesc.addressMode[0]   = cudaAddressModeBorder;
-#if defined(USE_HIP)
-    // AMD rejects cudaFilterModeLinear on element-read float textures at
-    // creation time; point-sample and interpolate in software instead
-    // (see image_sample_lut).
-    texDesc.filterMode       = cudaFilterModePoint;
-#else
     texDesc.filterMode       = cudaFilterModeLinear;
-#endif
     texDesc.readMode         = cudaReadModeElementType;
     texDesc.normalizedCoords = 0;
 	
@@ -635,6 +645,7 @@ cudaTextureObject_t create_sinc_texture_lut(cudaArray **cuArrayLut, int Tw, int 
     cudaCreateTextureObject(&texObjLut, &resDesc, &texDesc, NULL);
 	
 	return texObjLut;
+#endif
 }
 
 void gpuRIR_cuda::cuda_rirGenerator(float* rir, float* amp, float* tau, int M, int N, int T, float Fs) {
@@ -653,15 +664,23 @@ void gpuRIR_cuda::cuda_rirGenerator(float* rir, float* amp, float* tau, int M, i
 	if (lookup_table) {
 		int lut_len = Tw * lut_oversamp;
 		lut_len += ((lut_len%2)? 0 : 1); // Must be odd
+#if defined(USE_HIP)
+		float* sinc_lut = create_sinc_texture_lut(Tw, lut_len);
+#else
 		cudaArray* cuArrayLut;
 		cudaTextureObject_t sinc_lut = create_sinc_texture_lut(&cuArrayLut, Tw, lut_len);
+#endif
 		
 		generateRIR_kernel_lut<<<numBlocksIni, threadsPerBlockIni>>>( initialRIR, amp, tau, T, M, N, iniRIR_N, initialReduction, Tw/2, sinc_lut, lut_len/2+0.5 );
 		gpuErrchk( cudaDeviceSynchronize() );
 		gpuErrchk( cudaPeekAtLastError() );
 		
+#if defined(USE_HIP)
+		gpuErrchk( cudaFree(sinc_lut) );
+#else
 		cudaDestroyTextureObject(sinc_lut);
 		cudaFreeArray(cuArrayLut);
+#endif
 	} else {
 		generateRIR_kernel<<<numBlocksIni, threadsPerBlockIni>>>( initialRIR, amp, tau, T, M, N, iniRIR_N, initialReduction, Tw );
 		gpuErrchk( cudaDeviceSynchronize() );

@@ -61,28 +61,6 @@
 #define cudaMemcpyDeviceToHost    hipMemcpyDeviceToHost
 #define cudaMemcpyDeviceToDevice  hipMemcpyDeviceToDevice
 
-// ---- CUDA arrays + channel format (LUT texture backing store) ----
-#define cudaArray               hipArray
-#define cudaMallocArray         hipMallocArray
-#define cudaFreeArray           hipFreeArray
-#define cudaChannelFormatDesc   hipChannelFormatDesc
-#define cudaCreateChannelDesc   hipCreateChannelDesc
-#define cudaChannelFormatKindFloat  hipChannelFormatKindFloat
-// Deprecated but still provided by ROCm 7.x with the CUDA signature.
-#define cudaMemcpyToArray       hipMemcpyToArray
-
-// ---- Texture objects ----
-#define cudaTextureObject_t       hipTextureObject_t
-#define cudaCreateTextureObject   hipCreateTextureObject
-#define cudaDestroyTextureObject  hipDestroyTextureObject
-#define cudaResourceDesc          hipResourceDesc
-#define cudaTextureDesc           hipTextureDesc
-#define cudaResourceTypeArray     hipResourceTypeArray
-#define cudaAddressModeBorder     hipAddressModeBorder
-#define cudaFilterModeLinear      hipFilterModeLinear
-#define cudaFilterModePoint       hipFilterModePoint
-#define cudaReadModeElementType   hipReadModeElementType
-
 // ---- cuFFT -> hipFFT ----
 #define cufftHandle      hipfftHandle
 #define cufftComplex     hipfftComplex
