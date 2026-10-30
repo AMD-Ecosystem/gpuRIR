@@ -10,7 +10,7 @@
 #include <vector>
 #include "gpuRIR_cuda.h"
 
-#if CUDART_VERSION < 9000
+#if !defined(USE_HIP) && CUDART_VERSION < 9000
 #define __h2div h2div
 #endif
 
@@ -42,7 +42,7 @@ static const int nThreadsConv_x = 256;
 static const int nThreadsConv_y = 1;
 static const int nThreadsConv_z = 1;
 
-#if __CUDA_ARCH__ >= 530
+#if __CUDA_ARCH__ >= 530 || defined(__HIP_DEVICE_COMPILE__)
 #define h2zeros __float2half2_rn(0.0)
 #define h2ones __float2half2_rn(1.0)
 #define h2pi __float2half2_rn(PI)
@@ -164,7 +164,7 @@ __device__ __forceinline__ cufftComplex ComplexMul(cufftComplex a, cufftComplex 
 /* Mixed precision auxiliar device functions */
 /*********************************************/
 
-#if __CUDA_ARCH__ >= 530
+#if __CUDA_ARCH__ >= 530 || defined(__HIP_DEVICE_COMPILE__)
 
 __device__ __forceinline__ half2 h2abs(half2 x) {
 	uint32_t i = *reinterpret_cast<uint32_t*>(&x) & 0x7FFF7FFF;
@@ -505,13 +505,13 @@ __global__ void complexPointwiseMulAndScale(cufftComplex *signal_segments, cufft
 /* Mixed precision KERNELS */
 /***************************/
 
-#if CUDART_VERSION < 9020
+#if !defined(USE_HIP) && CUDART_VERSION < 9020
 __global__ void generateRIR_mp_kernel(half2* initialRIR, float* amp, float* tau, int T, int M, int N, int iniRIR_N, int ini_red, float Fs, float Tw_2, float Tw_inv) {
 	half2 h2Tw_inv = __float2half2_rn(Tw_inv);
 #else 
 __global__ void generateRIR_mp_kernel(half2* initialRIR, float* amp, float* tau, int T, int M, int N, int iniRIR_N, int ini_red, float Fs, float Tw_2, half2 h2Tw_inv) {
 #endif
-	#if __CUDA_ARCH__ >= 530
+	#if __CUDA_ARCH__ >= 530 || defined(__HIP_DEVICE_COMPILE__)
 		int t = blockIdx.x * blockDim.x + threadIdx.x;
 		int m = blockIdx.y * blockDim.y + threadIdx.y;
 		int n_ini = blockIdx.z * ini_red;
@@ -534,7 +534,7 @@ __global__ void generateRIR_mp_kernel(half2* initialRIR, float* amp, float* tau,
 
 __global__ void reduceRIR_mp_kernel(half2* initialRIR, half2* intermediateRIR, int M, int T, int N, int intRIR_N) {
 	extern __shared__ half2 sdata_mp[];
-	#if __CUDA_ARCH__ >= 530
+	#if __CUDA_ARCH__ >= 530 || defined(__HIP_DEVICE_COMPILE__)
 		int tid = threadIdx.x;
 		int n = blockIdx.x*(blockDim.x*2) + threadIdx.x;
 		int t = blockIdx.y;
@@ -559,7 +559,7 @@ __global__ void reduceRIR_mp_kernel(half2* initialRIR, half2* intermediateRIR, i
 }
 
 __global__ void h2RIR_to_floatRIR_kernel(half2* h2RIR, float* floatRIR, int M, int T) {
-	#if __CUDA_ARCH__ >= 530
+	#if __CUDA_ARCH__ >= 530 || defined(__HIP_DEVICE_COMPILE__)
 	int t = blockIdx.x * blockDim.x + threadIdx.x;
 	int m = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -727,7 +727,7 @@ void cuda_rirGenerator_mp(float* rir, float* amp, float* tau, int M, int N, int 
 		gpuErrchk( cudaMalloc(&initialRIR, M*(T/2)*iniRIR_N*sizeof(half2)) );
 
 		float Tw_2 = 8e-3f * Fs / 2;
-		#if CUDART_VERSION < 9020
+		#if !defined(USE_HIP) && CUDART_VERSION < 9020
 			// For CUDA versions older than 9.2 it is nos possible to call from host code __float2half2_rn,
 			// but doing it in the kernel is slower
 			float Tw_inv = 1.0f / (8e-3f * Fs);
@@ -1089,13 +1089,6 @@ gpuRIR_cuda::gpuRIR_cuda(bool mPrecision, bool lut) {
 }
 
 bool gpuRIR_cuda::activate_mixed_precision(bool activate) {
-#if defined(USE_HIP)
-	// The half2 mixed-precision kernels are guarded by __CUDA_ARCH__ >= 530
-	// and are not compiled for HIP, so the feature is unavailable on AMD.
-	if (activate) printf("Mixed precision is not supported on the HIP/ROCm build.\n");
-	mixed_precision = false;
-	return mixed_precision;
-#else
 	if (cuda_arch >= 530) {
 		if (activate && lookup_table) {
 			printf("The mixed precision implementation is not compatible with the lookup table.\n");
@@ -1108,7 +1101,6 @@ bool gpuRIR_cuda::activate_mixed_precision(bool activate) {
 		mixed_precision = false;
 	}
 	return mixed_precision;
-#endif
 }
 
 bool gpuRIR_cuda::activate_lut(bool activate) {
