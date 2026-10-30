@@ -241,9 +241,9 @@ typedef cudaTextureObject_t sinc_lut_t;
 
 __device__ __forceinline__ float image_sample_lut(float amp, float tau, float t, int Tw_2, sinc_lut_t sinc_lut, float lut_center) {
 	float t_tau = t - tau;
-	if (abs(t_tau) >= Tw_2) return 0.0f;
-	float coord = __fmaf_rz(t_tau, lut_oversamp, lut_center);
 #if defined(USE_HIP)
+	if (!(abs(t_tau) < Tw_2)) return 0.0f;
+	float coord = __fmaf_rz(t_tau, lut_oversamp, lut_center);
 	// Replicate CUDA's hardware linear filter in software using the
 	// unnormalized -0.5 texel-center convention: a coordinate c blends
 	// texels floor(c-0.5) and floor(c-0.5)+1 with weight frac(c-0.5).
@@ -254,7 +254,7 @@ __device__ __forceinline__ float image_sample_lut(float amp, float tau, float t,
 	int i = (int)i0;
 	return amp * ((1.0f - w) * sinc_lut[i] + w * sinc_lut[i + 1]);
 #else
-	return amp * tex1D<float>(sinc_lut, coord);
+	return (abs(t_tau)<Tw_2)? amp * tex1D<float>(sinc_lut, __fmaf_rz(t_tau,lut_oversamp,lut_center)) : 0.0f;
 #endif
 }
 
